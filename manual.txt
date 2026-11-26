@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Manual viewer</title>
+<meta name="theme-color" content="#23262a">
+<style>
+:root{--bench:#23262a;--tray:#2e3237;--line:#444a51;--ink:#e8eaed;--mut:#a3aab2;--crim:#c02341;--cyan:#5cc8e6;--amber:#e0a030}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bench);color:var(--ink);font:16px/1.4 -apple-system,"Segoe UI",system-ui,sans-serif}
+body{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+.bar{position:sticky;top:0;z-index:5;background:#1a1c1f;border-bottom:1px solid var(--line);padding:calc(6px + env(safe-area-inset-top)) 8px 6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+button,a.btn{min-height:44px;min-width:44px;padding:0 12px;border-radius:6px;border:1px solid var(--line);background:var(--tray);color:var(--ink);font:600 14px inherit;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;cursor:pointer}
+button:disabled{opacity:.4}
+a.back{background:var(--crim);border-color:var(--crim);color:#fff}
+input[type=number]{width:70px;min-height:44px;background:#1c1f22;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:0 8px;font:16px inherit}
+.sp{flex:1}
+.info{margin:10px 8px;padding:10px 12px;border-left:4px solid var(--amber);background:var(--tray);border-radius:4px;font-size:14px}
+.info b{color:var(--amber)}.info small{display:block;color:var(--mut)}
+#wrap{overflow:auto;margin:0 8px;border:1px solid var(--line);background:#555;-webkit-overflow-scrolling:touch}
+#pg{position:relative;margin:0 auto;background:#fff}
+#pg canvas{display:block}
+.hl{position:absolute;background:rgba(255,214,10,.45);mix-blend-mode:multiply;border-radius:2px;outline:2px solid rgba(224,160,48,.95);pointer-events:none}
+.band{position:absolute;left:0;right:0;background:rgba(255,214,10,.22);border-left:6px solid var(--crim);pointer-events:none}
+#msg{padding:30px 14px;text-align:center;color:var(--mut)}
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:6;background:#1a1c1f;border-top:1px solid var(--line);padding:8px 8px calc(8px + env(safe-area-inset-bottom));display:flex;gap:8px}
+.dock a{flex:1}
+:focus-visible{outline:3px solid var(--cyan);outline-offset:2px}
+</style></head>
+<body>
+<div class="bar">
+ <a class="btn back" id="back1" href="index.html">← Trainer</a>
+ <button id="prev" aria-label="Previous page">◀</button>
+ <input id="num" type="number" min="1" inputmode="numeric" aria-label="Page number">
+ <span id="of" style="color:var(--mut)"></span>
+ <button id="next" aria-label="Next page">▶</button>
+ <span class="sp"></span>
+ <button id="zo" aria-label="Zoom out">−</button><button id="zi" aria-label="Zoom in">+</button>
+</div>
+<div class="info" id="info"></div>
+<div id="wrap"><div id="pg"><canvas id="cv"></canvas><div id="ov"></div></div></div>
+<div id="msg">Loading manual…</div>
+<div class="dock"><a class="btn back" id="back2" href="index.html">← Back to the trainer</a></div>
+<script type="module">
+let pdfjs;
+const DOCS={ach180:{title:'ACH180 HVAC drive firmware manual, 3AXD50000955893 Rev B'},vfd13si:{title:'Carrier VFD-13SI installation manual'}};
+const q=new URLSearchParams(location.search),$=s=>document.querySelector(s);
+const key=q.get('doc')in DOCS?q.get('doc'):'ach180',D=DOCS[key];
+let page=Math.max(1,parseInt(q.get('page'))||1),zoom=1,pdf=null,hl=(q.get('hl')||'').split('|').filter(Boolean),label=q.get('label')||'',gen=0;
+// return link: back to the trainer tab and item the user came from
+const ret=new URLSearchParams();if(q.get('tab'))ret.set('tab',q.get('tab'));if(q.get('focus'))ret.set('focus',q.get('focus'));
+const retUrl='index.html'+(ret.toString()?'?'+ret:'');
+for(const id of['back1','back2'])$('#'+id).href=retUrl;
+const norm=s=>s.toLowerCase().replace(/[\s\u00ad\u2010-\u2015-]+/g,'');
+async function show(n,keep){
+ n=Math.min(pdf.numPages,Math.max(1,n));page=n;const my=++gen;
+ $('#num').value=n;$('#prev').disabled=n<=1;$('#next').disabled=n>=pdf.numPages;
+ const u=new URL(location.href);u.searchParams.set('page',n);history.replaceState(null,'',u);
+ const pg=await pdf.getPage(n);if(my!==gen)return;
+ const wrap=$('#wrap'),base=pg.getViewport({scale:1}),fit=(wrap.clientWidth-2)/base.width,sc=fit*zoom,dpr=window.devicePixelRatio||1;
+ const vp=pg.getViewport({scale:sc}),cv=$('#cv');
+ cv.width=Math.floor(vp.width*dpr);cv.height=Math.floor(vp.height*dpr);cv.style.width=vp.width+'px';cv.style.height=vp.height+'px';
+ $('#pg').style.width=vp.width+'px';$('#pg').style.height=vp.height+'px';
+ const ctx=cv.getContext('2d');
+ await pg.render({canvasContext:ctx,viewport:vp,transform:dpr!==1?[dpr,0,0,dpr,0,0]:null}).promise;if(my!==gen)return;
+ const tc=await pg.getTextContent();if(my!==gen)return;
+ const ov=$('#ov');ov.innerHTML='';
+ const items=tc.content?tc.content:tc.items,boxes=[];
+ for(const it of items){if(!it.str||!it.transform)continue;const t=pdfjs.Util.transform(vp.transform,it.transform),h=Math.hypot(t[2],t[3])||10;boxes.push({s:it.str,n:norm(it.str),x:t[4],y:t[5]-h*.82,w:it.width*sc,h:h*1.05,base:t[5]})}
+ const stream=boxes.map(b=>b.n).join(''),starts=[];{let p=0;for(const b of boxes){starts.push(p);p+=b.n.length}}
+ let found=0,first=null;
+ const add=(x,y,w,h,cls)=>{const d=document.createElement('div');d.className=cls;d.style.cssText=`left:${x}px;top:${y}px;width:${w}px;height:${h}px`;ov.appendChild(d);if(!first)first=y;found++};
+ for(const term of hl){
+  const row=term[0]==='#',needle=norm(row?term.slice(1):term);if(!needle)continue;
+  let from=0;
+  while(true){const i=stream.indexOf(needle,from);if(i<0)break;from=i+needle.length;
+   const j=i+needle.length;
+   // for row mode the next char must not continue a number (28.1 vs 28.15)
+   if(row&&boxes.length){const bi=starts.findIndex((s,k)=>s<=i&&i<s+boxes[k].n.length);const b=boxes[bi];if(!b)continue;
+    if(j<starts[bi]+b.n.length&&/[0-9]/.test(stream[j]||''))continue;
+    // only the row heading (id at the start of a line in the first column)
+    if(b.x>vp.width*.25)continue;
+    const line=boxes.filter(o=>Math.abs(o.base-b.base)<b.h*.5);const top=Math.min(...line.map(o=>o.y)),bot=Math.max(...line.map(o=>o.y+o.h));
+    add(0,top-2,vp.width,bot-top+4,'band');
+    for(const o of line.filter(o=>o.x<vp.width*.34))add(o.x-1,o.y-1,o.w+2,o.h+2,'hl');
+    break}
+   for(let k=0;k<boxes.length;k++){const b=boxes[k],s=starts[k],e=s+b.n.length;if(e<=i||s>=j||!b.n.length)continue;
+    const a=Math.max(i,s)-s,z=Math.min(j,e)-s,L=b.n.length;add(b.x+b.w*a/L-1,b.y-1,Math.max(6,b.w*(z-a)/L)+2,b.h+2,'hl')}
+   if(!row)break}
+ }
+ $('#msg').textContent='';
+ const parts=[];if(label)parts.push(`<b>${label.replace(/</g,'&lt;')}</b>`);
+ parts.push(`<small>${D.title}. Page ${n} of ${pdf.numPages}.${hl.length?(found?' Highlighted in yellow.':' The highlighted text was not found as text on this page; read the page for the topic.'):''}</small>`);
+ $('#info').innerHTML=parts.join('');
+ if(!keep&&first!=null)requestAnimationFrame(()=>{const w=$('#wrap');w.scrollTop=0;window.scrollTo({top:Math.max(0,$('#pg').getBoundingClientRect().top+window.scrollY+first-140),behavior:'auto'})});
+ else if(!keep)window.scrollTo(0,0);
+}
+async function init(){
+ try{
+  if(key!=='ach180')throw new Error('The Carrier VFD-13SI PDF was not included in the supplied archive.');
+  const loadText=async name=>{const r=await fetch(name);if(!r.ok)throw new Error('Could not load '+name+' ('+r.status+').');return r.text()};
+  const [libSource,workerSource,pdfBase64]=await Promise.all([loadText('pdfjs-library.txt'),loadText('pdfjs-worker.txt'),loadText('ACH180-firmware-manual-base64.txt')]);
+  const moduleUrl=URL.createObjectURL(new Blob([libSource],{type:'text/javascript'}));
+  pdfjs=await import(moduleUrl);
+  pdfjs.GlobalWorkerOptions.workerSrc=URL.createObjectURL(new Blob([workerSource],{type:'text/javascript'}));
+  const binary=atob(pdfBase64.trim()),bytes=new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+  pdf=await pdfjs.getDocument({data:bytes}).promise;
+ }catch(e){$('#msg').textContent=e.message||'Could not load the manual. Confirm all flat TXT support files were uploaded beside manual.html, then reload.';return}
+ $('#of').textContent='of '+pdf.numPages;$('#num').max=pdf.numPages;
+ $('#prev').onclick=()=>{hl=[];label='';show(page-1)};$('#next').onclick=()=>{hl=[];label='';show(page+1)};
+ $('#num').onchange=e=>{hl=[];label='';show(parseInt(e.target.value)||1)};
+ $('#zi').onclick=()=>{zoom=Math.min(3,zoom+.25);show(page,true)};$('#zo').onclick=()=>{zoom=Math.max(.75,zoom-.25);show(page,true)};
+ let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(()=>pdf&&show(page,true),250)});
+ addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;if(e.key==='ArrowRight'){hl=[];show(page+1)}if(e.key==='ArrowLeft'){hl=[];show(page-1)}});
+ show(page);
+}
+init();
+window.__manual={show:n=>show(n),get ready(){return !!pdf}};
+</script>
+</body></html>
